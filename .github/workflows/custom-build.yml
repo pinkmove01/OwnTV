@@ -16,6 +16,42 @@ jobs:
       - uses: android-actions/setup-android@v4
         with:
           packages: 'platform-tools'
+      - name: Branding (이름 + 아이콘)
+        run: |
+          set -e
+          APP_NAME="NEW_NAME"
+
+          # 1) 앱 이름 — 모든 로케일의 app_name을 한 번에 교체
+          COUNT=0
+          for f in $(grep -rl 'name="app_name"' core/src/main/res app/src/main/res || true); do
+            sed -i "s|<string name=\"app_name\">[^<]*</string>|<string name=\"app_name\">$APP_NAME</string>|g" "$f"
+            COUNT=$((COUNT+1))
+          done
+          echo "app_name 정의 파일 수정: $COUNT 개"
+          # 정의가 아예 없으면 앱 리소스에 새로 추가 (라이브러리 값을 덮어씀)
+          if ! grep -q 'name="app_name"' app/src/main/res/values/strings.xml; then
+            sed -i "s|</resources>|    <string name=\"app_name\">$APP_NAME</string>\n</resources>|" \
+              app/src/main/res/values/strings.xml
+            echo "app_name 새로 추가"
+          fi
+
+          # 2) 아이콘 + TV 배너 — 저장소 루트의 icon.png 사용
+          if [ -f icon.png ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq imagemagick
+            for pair in mdpi:108 hdpi:162 xhdpi:216 xxhdpi:324 xxxhdpi:432; do
+              d="${pair%%:*}"; s="${pair##*:}"
+              f="core/src/main/res/mipmap-$d/owntv_icon_eggshell_foreground.png"
+              convert icon.png -resize ${s}x${s}^ -gravity center -extent ${s}x${s} "$f"
+              echo "아이콘 -> $d (${s}px)"
+            done
+            convert icon.png -resize 320x180^ -gravity center -extent 320x180 \
+              core/src/main/res/drawable-xhdpi/owntv_banner_eggshell.png
+            echo "배너 -> drawable-xhdpi/owntv_banner_eggshell.png (320x180)"
+          else
+            echo "icon.png 없음 — 아이콘은 그대로 둡니다"
+          fi
+
       - uses: gradle/actions/setup-gradle@v4
       - run: |
           set -e
