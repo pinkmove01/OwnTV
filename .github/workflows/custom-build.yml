@@ -13,7 +13,9 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
       - uses: gradle/actions/setup-gradle@v4
       - run: |
           set -e
@@ -33,4 +35,3 @@ jobs:
           name: apk
           path: app/build/outputs/apk/standard/debug/*.apk
           if-no-files-found: error
-
