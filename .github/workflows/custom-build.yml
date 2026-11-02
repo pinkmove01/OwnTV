@@ -1,1 +1,36 @@
+name: CB
+on: [workflow_dispatch, push]
+jobs:
+  b:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: pinkmove01/OwnTV_Core
+          path: core
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - run: |
+          set -e
+          unzip -o owntv-patch.zip
+          git apply owntv-patch/owntv-app.patch
+          cp -r owntv-patch/app-src/* app/src/main/java/
+          mkdir -p app/src/main/assets
+          cp -r owntv-patch/assets/* app/src/main/assets/
+          cd core && git apply ../owntv-patch/owntv-core.patch && cd ..
+          mkdir -p ~/.gradle
+          echo "owntv.corePath=$GITHUB_WORKSPACE/core" >> ~/.gradle/gradle.properties
+          echo "org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g" >> ~/.gradle/gradle.properties
+          chmod +x ./gradlew
+          ./gradlew :app:assembleStandardDebug --stacktrace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: app/build/outputs/apk/standard/debug/*.apk
+          if-no-files-found: error
 
