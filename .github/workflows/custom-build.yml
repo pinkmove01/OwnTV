@@ -1,71 +1,212 @@
 name: CB
-on: [workflow_dispatch, push]
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
 jobs:
   b:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - name: Checkout app
+        uses: actions/checkout@v4
+
+      - name: Checkout core
+        uses: actions/checkout@v4
         with:
           repository: pinkmove01/OwnTV_Core
           path: core
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
+
       - uses: android-actions/setup-android@v4
         with:
           packages: 'platform-tools'
-      - name: Branding (이름 + 아이콘)
+
+      # ── 앱 이름 ──────────────────────────────────────────────
+      # core 의 app_name 은 core/core/src/main/res/values/donottranslate.xml 에 있고
+      # translatable="false" 입니다. 라이브러리 값은 app 값보다 약하므로,
+      # app 모듈의 strings.xml 에 app_name 을 넣는 것이 확실한 방법입니다.
+      # NEW_NAME 을 원하는 이름으로 바꾸세요 (한글 OK). 그대로 두면 이름은 유지됩니다.
+      # ────────────────────────────────────────────────────────
+      - name: Branding name
+        env:
+          APP_NAME: "NEW_NAME"
         run: |
           set -e
-          APP_NAME="NEW_NAME"
+          python3 - <<'PY'
+          import os, re, pathlib
+          name = (os.environ.get("APP_NAME") or "").strip()
+          p = pathlib.Path("app/src/main/res/values/strings.xml")
+          text = p.read_text(encoding="utf-8")
+          if not name or name == "NEW_NAME":
+              print("APP_NAME=NEW_NAME 그대로 -> 이름 변경 건너뜀 (OwnTV 유지)")
+          else:
+              esc = name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+              new = '<string name="app_name">%s</string>' % esc
+              pat = re.compile(r'<string name="app_name"[^>]*>.*?</string>', re.S)
+              if pat.search(text):
+                  text = pat.sub(new, text)
+                  print("app_name 갱신 ->", name)
+              else:
+                  text = text.replace("</resources>", "    " + new + "\n</resources>")
+                  print("app_name 신규 추가 ->", name)
+              p.write_text(text, encoding="utf-8")
+          PY
+          echo "--- app/src/main/res/values/strings.xml ---"
+          cat app/src/main/res/values/strings.xml
 
-          # 1) 앱 이름 — 모든 로케일의 app_name을 한 번에 교체
-          COUNT=0
-          for f in $(grep -rl 'name="app_name"' core/src/main/res app/src/main/res || true); do
-            sed -i "s|<string name=\"app_name\">[^<]*</string>|<string name=\"app_name\">$APP_NAME</string>|g" "$f"
-            COUNT=$((COUNT+1))
+      # ── 아이콘 / TV 배너 ─────────────────────────────────────
+      # 저장소 루트의 icon.png 를 씁니다. 없으면 기존 아이콘 그대로 빌드.
+      # 아이콘을 60% 로 줄여 중앙 배치하고 남는 테두리를 아이콘 모서리 색으로 채워
+      # 적응형 아이콘 마스크(원형/스퀘어컬)에 잘리지 않게 합니다.
+      # ────────────────────────────────────────────────────────
+      - name: Branding icon
+        run: |
+          set -e
+          if [ ! -f icon.png ]; then
+            echo "icon.png 없음 -> 기존 아이콘 유지"
+            exit 0
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick
+          EDGE=$(convert icon.png -format '%[hex:p{0,0}]' info: 2>/dev/null | cut -c1-6 || true)
+          case "$EDGE" in
+            [0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]) ;;
+            *) EDGE="1B6663" ;;
+          esac
+          echo "테두리 색: #$EDGE"
+          mkdir -p app/src/main/res/values
+          {
+            echo '<?xml version="1.0" encoding="utf-8"?>'
+            echo '<resources>'
+            echo "    <color name=\"owntv_icon_bg_eggshell\">#$EDGE</color>"
+            echo '</resources>'
+          } > app/src/main/res/values/zz_brand_icon.xml
+          for pair in mdpi:108 hdpi:162 xhdpi:216 xxhdpi:324 xxxhdpi:432; do
+            d="${pair%%:*}"; s="${pair##*:}"; inner=$((s * 60 / 100))
+            f="core/core/src/main/res/mipmap-$d/owntv_icon_eggshell_foreground.png"
+            convert -size ${s}x${s} "xc:#$EDGE" \
+              \( icon.png -resize ${inner}x${inner} \) -gravity center -composite \
+              -strip "PNG32:$f"
+            echo "아이콘 -> mipmap-$d ${s}px"
           done
-          echo "app_name 정의 파일 수정: $COUNT 개"
-          # 정의가 아예 없으면 앱 리소스에 새로 추가 (라이브러리 값을 덮어씀)
-          if ! grep -q 'name="app_name"' app/src/main/res/values/strings.xml; then
-            sed -i "s|</resources>|    <string name=\"app_name\">$APP_NAME</string>\n</resources>|" \
-              app/src/main/res/values/strings.xml
-            echo "app_name 새로 추가"
-          fi
-
-          # 2) 아이콘 + TV 배너 — 저장소 루트의 icon.png 사용
-          if [ -f icon.png ]; then
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq imagemagick
-            for pair in mdpi:108 hdpi:162 xhdpi:216 xxhdpi:324 xxxhdpi:432; do
-              d="${pair%%:*}"; s="${pair##*:}"
-              f="core/src/main/res/mipmap-$d/owntv_icon_eggshell_foreground.png"
-              convert icon.png -resize ${s}x${s}^ -gravity center -extent ${s}x${s} "$f"
-              echo "아이콘 -> $d (${s}px)"
-            done
-            convert icon.png -resize 320x180^ -gravity center -extent 320x180 \
-              core/src/main/res/drawable-xhdpi/owntv_banner_eggshell.png
-            echo "배너 -> drawable-xhdpi/owntv_banner_eggshell.png (320x180)"
-          else
-            echo "icon.png 없음 — 아이콘은 그대로 둡니다"
-          fi
+          convert -size 320x180 "xc:#$EDGE" \
+            \( icon.png -resize 120x120 \) -gravity center -composite \
+            -strip "PNG32:core/core/src/main/res/drawable-xhdpi/owntv_banner_eggshell.png"
+          echo "배너 -> drawable-xhdpi/owntv_banner_eggshell.png 320x180"
 
       - uses: gradle/actions/setup-gradle@v4
-      - run: |
+
+      # ── 패치 + 자막/폰트 넣기 ────────────────────────────────
+      # 폰에서는 폴더 경로를 직접 입력하기 번거로우므로,
+      # 저장소 "루트"에 올린 파일을 자동으로 찾아 assets 에 넣습니다.
+      #   *.srt *.vtt *.ass *.ssa *.sub  -> app/src/main/assets/subtitles/
+      #   mapping.json                   -> app/src/main/assets/subtitles/
+      #   *.ttf *.otf                    -> app/src/main/assets/fonts/
+      # ────────────────────────────────────────────────────────
+      - name: Patch and bundle subtitles/fonts
+        run: |
           set -e
-          unzip -o owntv-patch.zip
+          unzip -o -q owntv-patch.zip
           git apply owntv-patch/owntv-app.patch
           cp -r owntv-patch/app-src/* app/src/main/java/
-          mkdir -p app/src/main/assets
-          cp -r owntv-patch/assets/* app/src/main/assets/
-          cd core && git apply ../owntv-patch/owntv-core.patch && cd ..
+          ( cd core && git apply ../owntv-patch/owntv-core.patch )
+          echo "패치 적용 완료 (app + core)"
+
+          SUB=app/src/main/assets/subtitles
+          FNT=app/src/main/assets/fonts
+          mkdir -p "$SUB" "$FNT"
+
+          echo "== 자막 수집 (custom-assets/subtitles -> 루트 순) =="
+          n=0
+          shopt -s nullglob nocaseglob
+          for d in custom-assets/subtitles .; do
+            [ -d "$d" ] || continue
+            for f in "$d"/*.srt "$d"/*.vtt "$d"/*.ass "$d"/*.ssa "$d"/*.sub; do
+              cp -f "$f" "$SUB/"
+              echo "  자막: $(basename "$f")  <-  $d"
+              n=$((n + 1))
+            done
+          done
+          shopt -u nullglob nocaseglob
+          if [ "$n" -eq 0 ]; then echo "  (자막 파일 없음 -> 자막 없이 빌드)"; fi
+
+          if [ -f custom-assets/subtitles/mapping.json ]; then
+            cp -f custom-assets/subtitles/mapping.json "$SUB/mapping.json"
+            echo "  매핑: custom-assets/subtitles/mapping.json"
+          elif [ -f mapping.json ]; then
+            cp -f mapping.json "$SUB/mapping.json"
+            echo "  매핑: mapping.json (루트)"
+          else
+            printf '{}\n' > "$SUB/mapping.json"
+            echo "  매핑: 파일 없음 -> {} 생성"
+          fi
+
+          echo "== 폰트 수집 (custom-assets/fonts -> 루트 순, 첫 1개만) =="
+          files=()
+          shopt -s nullglob nocaseglob
+          for d in custom-assets/fonts .; do
+            [ -d "$d" ] || continue
+            for f in "$d"/*.ttf "$d"/*.otf; do files+=("$f"); done
+          done
+          shopt -u nullglob nocaseglob
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "  (폰트 파일 없음 -> 기본 폰트로 빌드)"
+          else
+            if [ ${#files[@]} -gt 1 ]; then
+              echo "  ⚠ 폰트 ${#files[@]}개 발견 — 첫 번째만 APK 에 들어갑니다:"
+              printf '     - %s\n' "${files[@]}"
+            fi
+            cp -f "${files[0]}" "$FNT/"
+            echo "  적용 폰트: ${files[0]}"
+            for f in "$FNT"/*.ttf "$FNT"/*.otf; do
+              [ -f "$f" ] || continue
+              echo "    $(basename "$f") | $(stat -c%s "$f") bytes | $(file -b "$f")"
+            done
+          fi
+
+          echo "== assets/subtitles =="
+          ls -1 "$SUB" || true
+          echo "== assets/fonts =="
+          ls -1 "$FNT" || true
+      - name: Build APK
+        run: |
+          set -e
           mkdir -p ~/.gradle
           echo "owntv.corePath=$GITHUB_WORKSPACE/core" >> ~/.gradle/gradle.properties
           echo "org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g" >> ~/.gradle/gradle.properties
           chmod +x ./gradlew
           ./gradlew :app:assembleStandardDebug --stacktrace
+
+      # ── 빌드 결과 확인 (로그 + Summary) ──────────────────────
+      - name: Verify APK
+        run: |
+          set -e
+          APK=$(ls app/build/outputs/apk/standard/debug/*.apk | head -1)
+          echo "APK=$APK"; ls -lh "$APK"
+          echo "== APK 안의 자막/폰트 =="
+          unzip -l "$APK" | grep -E 'assets/(subtitles|fonts)/' || echo "(없음)"
+          echo "== 표시 이름 / 패키지 =="
+          AAPT2=$(find "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/build-tools" -name aapt2 2>/dev/null | sort | tail -1 || true)
+          if [ -n "$AAPT2" ]; then
+            "$AAPT2" dump badging "$APK" 2>/dev/null | grep -E '^package: name|^application-label' || true
+          else
+            echo "aapt2 없음 (이름 확인 생략)"
+          fi
+          {
+            echo "### 빌드 결과"
+            echo ""
+            echo '```'
+            ls -lh "$APK"
+            unzip -l "$APK" | grep -E 'assets/(subtitles|fonts)/' || echo "(assets 비어 있음)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - uses: actions/upload-artifact@v4
         with:
           name: apk
