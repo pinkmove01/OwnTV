@@ -174,11 +174,13 @@ jobs:
           ls -1 "$SUB" || true
           echo "== assets/fonts =="
           ls -1 "$FNT" || true
-          - name: Subtitle source = direct folder
-          run: |
-          set -e
+      - name: Subtitle source = direct folder
+        run: |
           cp -f custom-src/BundledSubtitles.kt app/src/main/java/tv/own/owntv/player/BundledSubtitles.kt
-          echo "자막 소스 교체 완료"
+          grep -q 'Download/' app/src/main/java/tv/own/owntv/player/BundledSubtitles.kt \
+            || { echo 'ERROR: BundledSubtitles.kt 교체 실패'; exit 1; }
+          ls -l app/src/main/java/tv/own/owntv/player/BundledSubtitles.kt
+          echo "자막 소스: assets -> 폴더 직접경로 교체 완료"
       - name: Build APK
         run: |
           set -e
